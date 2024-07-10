@@ -1,122 +1,108 @@
+import scrapy
 import json
-import asyncio
+from scrapy.http import Request
 from datetime import datetime
-from playwright.async_api import async_playwright
 
-class MlbMatchupsScraper:
-    def __init__(self):
+class MlbMatchupsSpider(scrapy.Spider):
+    name = "mlb_matchups"
+    allowed_domains = ["baseballsavant.mlb.com"]
+    start_urls = ["https://baseballsavant.mlb.com/probable-pitchers"]
+
+    def __init__(self, *args, **kwargs):
+        super(MlbMatchupsSpider, self).__init__(*args, **kwargs)
         self.matchups = []
         self.start_time = None
 
-    async def run(self):
+    def start_requests(self):
         self.start_time = datetime.now()
-        async with async_playwright() as p:
-            browser = await p.chromium.launch()
-            page = await browser.new_page()
-            await page.goto("https://baseballsavant.mlb.com/probable-pitchers")
+        yield from super().start_requests()
 
-            await page.wait_for_selector('#homepage-new_probable-pitchers > div.article-template > div.template__content.template--two-column__content--one')
-            parent_div = await page.query_selector('#homepage-new_probable-pitchers > div.article-template > div.template__content.template--two-column__content--one')
-            mod_divs = await parent_div.query_selector_all('div.mod')
-            number_of_matchups = len(mod_divs)
-            print(f'Number of matchups for the day: {number_of_matchups}')
+    def parse(self, response):
+        parent_div = response.css('#homepage-new_probable-pitchers > div.article-template > div.template__content.template--two-column__content--one')
+        mod_divs = parent_div.css('div.mod')
+        number_of_matchups = len(mod_divs)
+        self.log(f'Number of matchups for the day: {number_of_matchups}')
 
-            for matchup in mod_divs:
-                game_info = await matchup.query_selector('div.game-info h2')
-                game_info_text = await game_info.inner_text()
-                away_team, home_team = map(str.strip, game_info_text.split('@'))
+        for matchup in mod_divs:
+            game_info = matchup.css('div.game-info h2::text').get()
+            away_team = game_info.split('@')[0].strip()
+            home_team = game_info.split('@')[1].strip()
+            date = matchup.css('span.date::text').get()
+            time_stadium_info = matchup.css('span.time::text').get()
+            time = time_stadium_info.split('|')[0].strip()
+            stadium = time_stadium_info.split('|')[1].strip()
+            preview_link = matchup.css('span:nth-child(4) > a::attr(href)').get()
+            if preview_link:
+                preview_link = response.urljoin(preview_link)
 
-                date = await matchup.query_selector('span.date')
-                date_text = await date.inner_text()
+            pitchers = matchup.css('div.player-info')
+            away_pitcher_details = pitchers[0] if len(pitchers) >= 1 else None
+            home_pitcher_details = pitchers[1] if len(pitchers) >= 2 else None
 
-                time_stadium_info = await matchup.query_selector('span.time')
-                time_stadium_info_text = await time_stadium_info.inner_text()
-                time, stadium = map(str.strip, time_stadium_info_text.split('|'))
+            if away_pitcher_details:
+                away_pitcher_name = away_pitcher_details.css('h3 a::text').get()
+                away_pitcher_link = response.urljoin(away_pitcher_details.css('h3 a::attr(href)').get())
+                away_pitcher_number = away_pitcher_details.css('span.number::text').get()[1:]
+                away_pitcher_throws = away_pitcher_details.css('span.throws::text').get().split(': ')[1]
+                away_stats = self.extract_pitcher_stats(matchup, 'div.col.one')
+            else:
+                away_pitcher_name = away_pitcher_link = away_pitcher_number = away_pitcher_throws = None
+                away_stats = None
 
-                preview_link_elem = await matchup.query_selector('span:nth-child(4) > a')
-                preview_link = await preview_link_elem.get_attribute('href') if preview_link_elem else None
-                if preview_link:
-                    preview_link = page.urljoin(preview_link)
+            if home_pitcher_details:
+                home_pitcher_name = home_pitcher_details.css('h3 a::text').get()
+                home_pitcher_link = response.urljoin(home_pitcher_details.css('h3 a::attr(href)').get())
+                home_pitcher_number = home_pitcher_details.css('span.number::text').get()[1:]
+                home_pitcher_throws = home_pitcher_details.css('span.throws::text').get().split(': ')[1]
+                home_stats = self.extract_pitcher_stats(matchup, 'div.col.two')
+            else:
+                home_pitcher_name = home_pitcher_link = home_pitcher_number = home_pitcher_throws = None
+                home_stats = None
 
-                pitchers = await matchup.query_selector_all('div.player-info')
-                away_pitcher_details = pitchers[0] if len(pitchers) >= 1 else None
-                home_pitcher_details = pitchers[1] if len(pitchers) >= 2 else None
+            self.matchups.append({
+                'away_team': away_team,
+                'home_team': home_team,
+                'date': date,
+                'time': time,
+                'stadium': stadium,
+                'away_pitcher_name': away_pitcher_name,
+                'away_pitcher_link': away_pitcher_link,
+                'away_pitcher_number': away_pitcher_number,
+                'away_pitcher_throws': away_pitcher_throws,
+                'away_stats': away_stats,
+                'home_pitcher_name': home_pitcher_name,
+                'home_pitcher_link': home_pitcher_link,
+                'home_pitcher_number': home_pitcher_number,
+                'home_pitcher_throws': home_pitcher_throws,
+                'home_stats': home_stats,
+                'preview_link': preview_link
+            })
 
-                if away_pitcher_details:
-                    away_pitcher_name_elem = await away_pitcher_details.query_selector('h3 a')
-                    away_pitcher_name = await away_pitcher_name_elem.inner_text()
-                    away_pitcher_link = await away_pitcher_name_elem.get_attribute('href')
-                    away_pitcher_number_elem = await away_pitcher_details.query_selector('span.number')
-                    away_pitcher_number = await away_pitcher_number_elem.inner_text()[1:]
-                    away_pitcher_throws_elem = await away_pitcher_details.query_selector('span.throws')
-                    away_pitcher_throws = (await away_pitcher_throws_elem.inner_text()).split(': ')[1]
-                    away_stats = await self.extract_pitcher_stats(matchup, 'div.col.one')
-                else:
-                    away_pitcher_name = away_pitcher_link = away_pitcher_number = away_pitcher_throws = None
-                    away_stats = None
-
-                if home_pitcher_details:
-                    home_pitcher_name_elem = await home_pitcher_details.query_selector('h3 a')
-                    home_pitcher_name = await home_pitcher_name_elem.inner_text()
-                    home_pitcher_link = await home_pitcher_name_elem.get_attribute('href')
-                    home_pitcher_number_elem = await home_pitcher_details.query_selector('span.number')
-                    home_pitcher_number = await home_pitcher_number_elem.inner_text()[1:]
-                    home_pitcher_throws_elem = await home_pitcher_details.query_selector('span.throws')
-                    home_pitcher_throws = (await home_pitcher_throws_elem.inner_text()).split(': ')[1]
-                    home_stats = await self.extract_pitcher_stats(matchup, 'div.col.two')
-                else:
-                    home_pitcher_name = home_pitcher_link = home_pitcher_number = home_pitcher_throws = None
-                    home_stats = None
-
-                self.matchups.append({
-                    'away_team': away_team,
-                    'home_team': home_team,
-                    'date': date_text,
-                    'time': time,
-                    'stadium': stadium,
-                    'away_pitcher_name': away_pitcher_name,
-                    'away_pitcher_link': page.urljoin(away_pitcher_link) if away_pitcher_link else None,
-                    'away_pitcher_number': away_pitcher_number,
-                    'away_pitcher_throws': away_pitcher_throws,
-                    'away_stats': away_stats,
-                    'home_pitcher_name': home_pitcher_name,
-                    'home_pitcher_link': page.urljoin(home_pitcher_link) if home_pitcher_link else None,
-                    'home_pitcher_number': home_pitcher_number,
-                    'home_pitcher_throws': home_pitcher_throws,
-                    'home_stats': home_stats,
-                    'preview_link': preview_link
-                })
-
-            await browser.close()
-            self.save_matchups()
-
-    async def extract_pitcher_stats(self, matchup, col_class):
+    def extract_pitcher_stats(self, matchup, col_class):
         stats = {}
-        headers_elems = await matchup.query_selector_all(f'{col_class} table:nth-child(7) > thead > tr > th')
-        for i, header_elem in enumerate(headers_elems):
-            header_cleaned = (await header_elem.inner_text()).strip()
-            stat_value_elem = await matchup.query_selector(f'{col_class} table:nth-child(7) > tbody > tr > td:nth-child({i+1})')
-            stat_value = (await stat_value_elem.inner_text()).strip() if stat_value_elem else None
+        headers = matchup.css(f'{col_class} table:nth-child(7) > thead > tr > th::text').getall()
+        for i, header in enumerate(headers):
+            header_cleaned = header.strip()
+            stat_value = matchup.css(f'{col_class} table:nth-child(7) > tbody > tr > td:nth-child({i+1})::text').get()
+            if stat_value:
+                stat_value = stat_value.strip()
             stats[header_cleaned] = stat_value
 
-        headers_elems = await matchup.query_selector_all(f'{col_class} table:nth-child(8) > thead > tr > th')
-        for i, header_elem in enumerate(headers_elems):
-            header_cleaned = (await header_elem.inner_text()).strip()
-            stat_value_elem = await matchup.query_selector(f'{col_class} table:nth-child(8) > tbody > tr > td:nth-child({i+1})')
-            stat_value = (await stat_value_elem.inner_text()).strip() if stat_value_elem else None
+        headers = matchup.css(f'{col_class} table:nth-child(8) > thead > tr > th::text').getall()
+        for i, header in enumerate(headers):
+            header_cleaned = header.strip()
+            stat_value = matchup.css(f'{col_class} table:nth-child(8) > tbody > tr > td:nth-child({i+1})::text').get()
+            if stat_value:
+                stat_value = stat_value.strip()
             stats[header_cleaned] = stat_value
 
         return stats
 
-    def save_matchups(self):
+    def close(self, reason):
         with open('matchups.json', 'w', encoding='utf-8') as f:
             json.dump(self.matchups, f, ensure_ascii=False, indent=4)
 
         end_time = datetime.now()
         runtime = end_time - self.start_time
-        print(f'Runtime: {runtime}')
-        print('Matchups saved to matchups.json')
-
-if __name__ == "__main__":
-    scraper = MlbMatchupsScraper()
-    asyncio.run(scraper.run())
+        self.log(f'Runtime: {runtime}')
+        self.log('Matchups saved to matchups.json')
