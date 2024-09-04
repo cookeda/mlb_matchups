@@ -1,79 +1,129 @@
 from selenium import webdriver
-import requests
-webdriver.Chrome
-from selenium.webdriver.chrome.options import Options
-from bs4 import BeautifulSoup
-from webdriver_manager.chrome import ChromeDriverManager
-from datetime import datetime, timedelta
-from selenium.webdriver.chrome.service import Service
-import time
-
-
-import json
 import os
+import time
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from itertools import product
+from datetime import datetime, timedelta
 
-# Global Variables
-options = Options()
-#options.add_argument('--headless')
-options.add_argument("--no-sandbox")
-options.add_argument("--disable-dev-shm-usage")
-options.add_argument('log-level=3')
+class FangraphsScraper:
+    def __init__(self):
+        # Setup WebDriver options
+        self.options = Options()
+        self.options.add_argument("--no-sandbox")
+        self.options.add_argument("--headless")
+        self.options.add_argument("--disable-dev-shm-usage")
+        self.options.add_argument('log-level=3')
 
-# Initialize the Service
-service = Service(ChromeDriverManager().install())
+        # Initialize the Service and WebDriver
+        self.service = Service(ChromeDriverManager().install())
+        self.driver = webdriver.Chrome(service=self.service, options=self.options)
 
-# Initialize WebDriver without the 'desired_capabilities' argument
-driver = webdriver.Chrome(service=service, options=options)
+        # Define the download path
+        self.download_path = os.path.join(os.path.expanduser("~"), "Downloads")
 
+    def generate_urls(self):
+        # Define the variables
+        handedness = {
+            "all": "",
+            "RHP": 2,
+            "LHP": 1
+        }
 
-link = "https://www.fangraphs.com/leaders/splits-leaderboards?splitArr=2,90&splitArrPitch=&autoPt=false&splitTeams=false&statType=team&statgroup=2&startDate=2024-03-01&endDate=2024-11-01&players=&filter=&groupBy=season&wxTemperature=&wxPressure=&wxAirDensity=&wxElevation=&wxWindSpeed=&position=B&sort=23,1"
-'''
-RHP      : https://www.fangraphs.com/leaders/splits-leaderboards?splitArr=2&splitArrPitch=&autoPt=false&splitTeams=false&statType=team&statgroup=1&startDate=2024-03-01&endDate=2024-11-01&players=&filter=&groupBy=season&wxTemperature=&wxPressure=&wxAirDensity=&wxElevation=&wxWindSpeed=&position=B&sort=23,1
-RHP DAY  : https://www.fangraphs.com/leaders/splits-leaderboards?splitArr=2,90&splitArrPitch=&autoPt=false&splitTeams=false&statType=team&statgroup=1&startDate=2024-03-01&endDate=2024-11-01&players=&filter=&groupBy=season&wxTemperature=&wxPressure=&wxAirDensity=&wxElevation=&wxWindSpeed=&position=B&sort=23,1 
-RHP NIGHT: https://www.fangraphs.com/leaders/splits-leaderboards?splitArr=2,91&splitArrPitch=&autoPt=false&splitTeams=false&statType=team&statgroup=1&startDate=2024-03-01&endDate=2024-11-01&players=&filter=&groupBy=season&wxTemperature=&wxPressure=&wxAirDensity=&wxElevation=&wxWindSpeed=&position=B&sort=23,1
-'''
+        time_of_day = {
+            "anytime": "",
+            "day": ",90",
+            "night": ",91"
+        }
 
-'''
-LHP      : https://www.fangraphs.com/leaders/splits-leaderboards?splitArr=1&splitArrPitch=&autoPt=false&splitTeams=false&statType=team&statgroup=1&startDate=2024-03-01&endDate=2024-11-01&players=&filter=&groupBy=season&wxTemperature=&wxPressure=&wxAirDensity=&wxElevation=&wxWindSpeed=&position=B&sort=23,1
-LHP DAY  : https://www.fangraphs.com/leaders/splits-leaderboards?splitArr=1,90&splitArrPitch=&autoPt=false&splitTeams=false&statType=team&statgroup=1&startDate=2024-03-01&endDate=2024-11-01&players=&filter=&groupBy=season&wxTemperature=&wxPressure=&wxAirDensity=&wxElevation=&wxWindSpeed=&position=B&sort=23,1 
-LHP NIGHT: https://www.fangraphs.com/leaders/splits-leaderboards?splitArr=1,91&splitArrPitch=&autoPt=false&splitTeams=false&statType=team&statgroup=1&startDate=2024-03-01&endDate=2024-11-01&players=&filter=&groupBy=season&wxTemperature=&wxPressure=&wxAirDensity=&wxElevation=&wxWindSpeed=&position=B&sort=23,1
-'''
+        # Today's date and the start day ranges
+        self.end_day = datetime.today()
+        start_day_deltas = [7, 14, 30, 60, 90]
 
-# Function to generate dynamic date range
-def generate_dates(days_before):
-    end_date = datetime.now().strftime('%Y-%m-%d')
-    start_date = (datetime.now() - timedelta(days=days_before)).strftime('%Y-%m-%d')
-    return start_date, end_date
+        # Function to generate the URL with the given parameters
+        def generate_url(hand, time, start_date):
+            link = "https://www.fangraphs.com/leaders/splits-leaderboards?splitArr={2}{,90}&splitArrPitch=&autoPt=false&splitTeams=false&statType=team&statgroup=2&startDate={2024-03-01}&endDate={2024-11-01}&players=&filter=&groupBy=season&wxTemperature=&wxPressure=&wxAirDensity=&wxElevation=&wxWindSpeed=&position=B&sort=23,1"
+            # Replace the placeholders
+            link = link.replace("{2}", f"{hand}")
+            link = link.replace("{,90}", f"{time}")
+            link = link.replace("{2024-03-01}", start_date.strftime("%Y-%m-%d"))
+            link = link.replace("{2024-11-01}", self.end_day.strftime("%Y-%m-%d"))
+            
+            return link
 
-# Example of dynamic URL generation based on date range
-start_date, end_date = generate_dates(7)  # Change 7 to 10, 14, or 30 as needed
+        # Generate all combinations of handedness, time_of_day, and start_day
+        url_info = []
+        for hand, time, delta in product(handedness.items(), time_of_day.items(), start_day_deltas):
+            start_date = self.end_day - timedelta(days=delta)
+            url = generate_url(hand[1], time[1], start_date)
+            url_info.append({
+                "url": url,
+                "hand": hand[0],
+                "time": time[0],
+                "start_date": start_date.strftime("%Y-%m-%d"),
+                "delta": delta
+            })
+        
+        return url_info
 
-# Navigate to the webpage
-driver.get(link)
-time.sleep(10)  # Adjust the sleep time if necessary
-csv_xpath = '//*[@id="react-drop-test"]/div[2]/a'
-csv_element = driver.find_element("xpath", csv_xpath)
-driver.execute_script("arguments[0].scrollIntoView(true);", csv_element)
+    def download_csv(self, link_info):
+        try:
+            # Navigate to the webpage
+            self.driver.get(link_info["url"])
+            time.sleep(3)  # Adjust the sleep time if necessary
 
-# Use JavaScript to click the element
-driver.execute_script("arguments[0].click();", csv_element)
+            # Find the CSV download button by XPath and click it
+            csv_xpath = '//*[@id="react-drop-test"]/div[2]/a'
+            csv_element = self.driver.find_element("xpath", csv_xpath)
+            self.driver.execute_script("arguments[0].scrollIntoView(true);", csv_element)
+            self.driver.execute_script("arguments[0].click();", csv_element)
 
-# Wait for the download to complete (adjust based on download speed)
-time.sleep(5)
+            # Wait for the download to complete (adjust based on download speed)
+            time.sleep(2)
 
-# Move the file to the desired directory
-download_path = os.path.join(os.path.expanduser("~"), "Downloads")
-files = os.listdir(download_path)
-csv_files = [f for f in files if f.endswith('.csv')]
+            # Get the latest downloaded CSV file
+            csv_files = [f for f in os.listdir(self.download_path) if f.endswith('.csv')]
+            latest_file = max([os.path.join(self.download_path, f) for f in csv_files], key=os.path.getctime)
 
-# Assuming the latest file is the one you just downloaded
-latest_file = max([os.path.join(download_path, f) for f in csv_files], key=os.path.getctime)
+            return latest_file
 
-# Destination path in your project
-destination_path = os.path.join("C:\\Projects\\mlb_matchups\\mlb\\data", os.path.basename(latest_file))
-os.rename(latest_file, destination_path)
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            return None
 
-print(f"File saved to {destination_path}")
+    def move_file(self, source, link_info):
+        try:
+            # Create a unique filename
+            end_date = self.end_day.strftime("%Y-%m-%d")
+            filename = f"{end_date}_{link_info['hand']}_{link_info['time']}_{link_info['delta']}days.csv"
+            destination_path = os.path.join("C:\\Projects\\mlb_matchups\\data", filename)
+            os.rename(source, destination_path)
+            print(f"File saved to {destination_path}")
+        except Exception as e:
+            print(f"An error occurred while moving the file: {e}")
 
-# Close the WebDriver
-driver.quit()
+    def scrape_and_download(self):
+        # Generate the URLs with additional info
+        urls_info = self.generate_urls()
+
+        # Scrape and download CSVs for each URL
+        for link_info in urls_info:
+            latest_file = self.download_csv(link_info)
+            if latest_file:
+                self.move_file(latest_file, link_info)
+
+    def quit(self):
+        # Close the WebDriver
+        self.driver.quit()
+
+# Example of usage
+if __name__ == "__main__":
+    # Initialize the scraper object
+    scraper = FangraphsScraper()
+
+    # Scrape and download CSVs for generated URLs
+    scraper.scrape_and_download()
+
+    # Close the WebDriver
+    scraper.quit()
